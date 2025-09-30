@@ -1,0 +1,58 @@
+datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+generator client { provider = "prisma-client-js" }
+
+model User {
+  id           String   @id @db.VarChar(32) // Discord userId
+  balance      Int      @default(1000)
+  dailyClaimed DateTime?
+  banned       Boolean  @default(false)
+  clientSeed   String?  // 공정성용 (선택)
+  createdAt    DateTime @default(now())
+  bets         Bet[]
+  seats        Seat[]
+}
+
+model Bet {
+  id          String   @id @default(cuid())
+  userId      String
+  tableId     String?     // 블랙잭/바카라 라운드 추적
+  game        GameType
+  amount      Int
+  outcome     String      // "WIN"|"LOSE"|"PUSH"|("BANKER"/"PLAYER"/"TIE")
+  odds        Float       @default(1.0)
+  delta       Int
+  meta        Json?
+  commitHash  String?     // commit→reveal
+  serverSeed  String?
+  clientSeed  String?
+  nonce       Int?
+  createdAt   DateTime    @default(now())
+  user        User        @relation(fields: [userId], references: [id])
+}
+
+model Table {
+  id          String       @id @default(cuid())
+  type        GameType
+  status      TableStatus  @default(OPEN)
+  channelId   String
+  messageId   String?
+  minPlayers  Int          @default(2)  // 블랙잭 최소 2
+  maxPlayers  Int          @default(6)  // 블랙잭 최대 6
+  stateJson   Json?        // 라운드/타이머/턴 인덱스 등
+  shoeJson    Json?        // 블랙잭 슈
+  seats       Seat[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model Seat {
+  id        String  @id @default(cuid())
+  tableId   String
+  userId    String
+  joinedAt  DateTime @default(now())
+  table     Table   @relation(fields: [tableId], references: [id])
+  user      User    @relation(fields: [userId], references: [id])
+}
+
+enum GameType { BLACKJACK BACCARAT SLOTS }
+enum TableStatus { OPEN RUNNING SETTLING CLOSED }

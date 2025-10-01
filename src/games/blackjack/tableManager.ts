@@ -1,12 +1,18 @@
 import {
-  ChannelType, EmbedBuilder, ThreadAutoArchiveDuration, ButtonBuilder,
+  ChannelType, ThreadAutoArchiveDuration, ButtonBuilder,
   ButtonStyle, ActionRowBuilder, ButtonInteraction, TextChannel
 } from 'discord.js';
 import { prisma } from '../../db/client.js';
-import { withTableLock } from '../../locks.js';
 import { CFG } from '../../config.js';
 import { makeId } from '../../utils/ids.js';
 import { embedOpen, rowJoin, rowBetting, embedBetting } from './ui.js';
+import { Prisma } from '@prisma/client'; // ✅ 추가
+
+type BJState =
+  | { phase: 'BETTING'; until: number; bets: Record<string, number> }
+  | { phase: 'DEAL' }
+  | { phase: 'ACTION' }
+  | { phase: 'SETTLE' };
 
 const loops = new Set<string>();
 
@@ -35,54 +41,63 @@ export function ensureTableLoop(tableId: string) {
 }
 
 async function step(tableId: string) {
-  await withTableLock(tableId, async () => {
-    const t = await prisma.table.findUnique({ where: { id: tableId }, include: { seats: true }});
-    if (!t) return;
+  // 단순 골조: 실제 운영에서는 withTableLock 같은 직렬화 유틸을 써도 됩니다
+  const t = await prisma.table.findUnique({ where: { id: tableId }, include: { seats: true }});
+  if (!t) return;
 
-    // 채널/메시지
-    const channel = await (await import('discord.js')).default.Client.prototype.channels.fetch.call({} as any, t.channelId).catch(()=>null);
-    // 위 한 줄은 타입 헷갈림 회피용—실전에서는 index/router에서 client 주입해 edit하는 방식 권장.
-    // 여기선 DB 상태머신 골조만 제공.
-
-    if (t.seats.length < t.minPlayers) {
-      if (t.status !== 'OPEN') {
-        await prisma.table.update({ where: { id: t.id }, data: { status: 'OPEN', stateJson: null }});
-      }
-      return;
-    }
-
-    // BETTING 시작
-    if (t.status === 'OPEN' || t.status === 'RUNNING' && !t.stateJson?.until) {
-      const until = Date.now() + CFG.BJ_BET_SEC*1000;
+  if (t.seats.length < t.minPlayers) {
+    if (t.status !== 'OPEN') {
       await prisma.table.update({
         where: { id: t.id },
-        data: { status: 'RUNNING', stateJson: { phase: 'BETTING', until, bets: {} } }
+        data: {
+          status: 'OPEN',
+          stateJson: Prisma.DbNull, // ✅ DB NULL 로 명시
+        }
       });
     }
+    return;
+  }
 
-    const state = (await prisma.table.findUnique({ where: { id: t.id }}))!.stateJson as any;
-    if (state?.phase === 'BETTING') {
-      if (Date.now() >= state.until) {
-        // TODO: DEAL → ACTION → SETTLE
-        await prisma.table.update({ where: { id: t.id }, data: { stateJson: { phase: 'DEAL' } }});
-      } else {
-        const left = Math.max(0, Math.floor((state.until - Date.now())/1000));
-        // UI 업데이트는 실제로는 client로 message.edit 해야 함 (여기선 골조)
-        // await message.edit({ embeds: [embedBetting(left, t.seats)], components: [rowBetting(t.id)] });
-      }
+  // BETTING 시작
+  const state = (t.stateJson ?? null) as BJState | null; // ✅ 안전 캐스팅
+  const hasUntil = state && (state as any).until !== undefined;
+
+  if (t.status === 'OPEN' || (t.status === 'RUNNING' && !hasUntil)) {
+    const until = Date.now() + CFG.BJ_BET_SEC * 1000;
+    const next: BJState = { phase: 'BETTING', until, bets: {} };
+    await prisma.table.update({
+      where: { id: t.id },
+      data: { status: 'RUNNING', stateJson: next }
+    });
+    return;
+  }
+
+  // BETTING 진행 중이면 남은 시간 체크
+  if (state?.phase === 'BETTING') {
+    if (Date.now() >= state.until) {
+      await prisma.table.update({
+        where: { id: t.id },
+        data: { stateJson: { phase: 'DEAL' } as BJState }
+      });
+    } else {
+      const left = Math.max(0, Math.floor((state.until - Date.now()) / 1000));
+      // UI 업데이트는 message.edit로 처리(여기선 골조)
+      // await message.edit({ embeds: [embedBetting(left, t.seats)], components: [rowBetting(t.id)] });
     }
-  });
+  }
 }
 
 export async function handleBJButton(i: ButtonInteraction, action: string, rest: string[]) {
   if (action === 'open') {
-    if (i.channel?.type !== ChannelType.GuildText) return i.reply({ ephemeral: true, content: '텍스트 채널에서만 가능' });
+    if (i.channel?.type !== ChannelType.GuildText)
+      return i.reply({ ephemeral: true, content: '텍스트 채널에서만 가능' });
     await openTable(i.channel as TextChannel);
     return i.reply({ ephemeral: true, content: '블랙잭 테이블을 열었습니다!' });
   }
+
   if (action === 'join') {
     const tableId = rest[0];
-    await prisma.seat.create({ data: { tableId, userId: i.user.id } }).catch(()=>{});
+    await prisma.seat.create({ data: { tableId, userId: i.user.id } }).catch(() => {});
     return i.reply({ ephemeral: true, content: '착석 완료!' });
   }
 }

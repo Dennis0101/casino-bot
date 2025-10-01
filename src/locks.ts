@@ -1,0 +1,11 @@
+import { prisma } from './db/client.js';
+
+export async function withTableLock<T>(tableId: string, fn: () => Promise<T>): Promise<T> {
+  const [{ k }]: any = await prisma.$queryRawUnsafe(
+    "select ('x'||substr(md5($1),1,16))::bit(64)::bigint as k", tableId
+  );
+  const got: any = await prisma.$queryRawUnsafe('select pg_try_advisory_lock($1) as ok', k);
+  if (!got[0].ok) throw new Error('Table busy');
+  try { return await fn(); }
+  finally { await prisma.$queryRawUnsafe('select pg_advisory_unlock($1)', k); }
+}

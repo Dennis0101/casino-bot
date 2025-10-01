@@ -3,7 +3,7 @@ import { prisma } from '../db/client.js';
 import { makeId } from '../utils/ids.js';
 import { num } from '../utils/format.js';
 import { hit } from '../utils/rateLimit.js';
-import type { PrismaClient } from '@prisma/client'; // ✅ 트랜잭션 타입
+import type { Prisma, PrismaClient } from '@prisma/client'; 
 
 const SYMBOLS = ['🍒','🍋','🔔','⭐','7️⃣','💎'];
 
@@ -26,8 +26,8 @@ export async function handleSlots(i: ButtonInteraction, action: string, rest: st
       return i.reply({ ephemeral: true, content: '잘못된 베팅 금액' });
 
     try {
-      const result = await prisma.$transaction(async (tx: PrismaClient) => { // ✅ 타입 명시
-        // 🔧 NOTE: 아래 lock은 타입 선언에 없으므로 제거(필요하면 SELECT ... FOR UPDATE로 별도 구현)
+      // ✅ TransactionClient 사용
+      const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const u = await tx.user.findUnique({ where: { id: i.user.id } });
         if (!u) throw new Error('유저 없음');
         if (u.banned) throw new Error('사용 불가');
@@ -35,6 +35,7 @@ export async function handleSlots(i: ButtonInteraction, action: string, rest: st
 
         const r = () => SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)];
         const reel = [r(), r(), r()];
+
         let payout = 0;
         if (reel[0] === reel[1] && reel[1] === reel[2]) payout = bet * 10;
         else if (new Set(reel).size === 2) payout = bet * 2;
@@ -61,6 +62,7 @@ export async function handleSlots(i: ButtonInteraction, action: string, rest: st
         return { reel, delta, balance: u.balance + delta };
       });
 
+      // ✅ 이제 result는 any[]가 아니라 { reel, delta, balance }
       const msg = result.delta >= 0
         ? `🎰 ${result.reel.join(' | ')}\n축하! **+${num(result.delta)}** (잔액 ${num(result.balance)})`
         : `🎰 ${result.reel.join(' | ')}\n아쉽! **${num(result.delta)}** (잔액 ${num(result.balance)})`;

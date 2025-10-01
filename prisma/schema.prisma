@@ -9,11 +9,11 @@ generator client {
 }
 
 model User {
-  id           String   @id @db.VarChar(32)            // Discord userId
+  id           String   @id @db.VarChar(32) // Discord userId
   balance      Int      @default(1000)
   dailyClaimed DateTime?
   banned       Boolean  @default(false)
-  clientSeed   String?                                  // 공정성용(선택)
+  clientSeed   String?  // 공정성용(선택)
   createdAt    DateTime @default(now())
   bets         Bet[]
   seats        Seat[]
@@ -24,24 +24,24 @@ model User {
 model Bet {
   id          String      @id @default(cuid())
   userId      String
-  tableId     String?                                      // 블랙잭/바카라(슬롯은 null)
+  tableId     String?                           // 블랙잭/바카라 라운드 추적(슬롯은 null)
   game        GameType
   amount      Int
-  outcome     Outcome                                      // enum
-  odds        Float      @default(1.0)
-  delta       Int
-  meta        Json?
-  commitHash  String?                                      // commit→reveal
+  outcome     Outcome                           // enum (오타 방지)
+  odds        Float       @default(1.0)         // 배당 기록(검증용)
+  delta       Int                                  // 정산 결과(+/-)
+  meta        Json?                              // 카드/슬롯 릴 등 상세
+  commitHash  String?                            // commit→reveal
   serverSeed  String?
   clientSeed  String?
   nonce       Int?
-  createdAt   DateTime   @default(now())
+  createdAt   DateTime    @default(now())
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   table  Table? @relation(fields: [tableId], references: [id], onDelete: SetNull)
 
-  @@index([userId, createdAt])
-  @@index([tableId, createdAt])
+  @@index([userId, createdAt])                  // 유저 히스토리/랭킹
+  @@index([tableId, createdAt])                 // 테이블 정산 조회
   @@index([game, createdAt])
 }
 
@@ -51,10 +51,10 @@ model Table {
   status      TableStatus  @default(OPEN)
   channelId   String
   messageId   String?
-  minPlayers  Int          @default(2)                     // 블랙잭 최소 2
-  maxPlayers  Int          @default(6)                     // 블랙잭 최대 6
-  stateJson   Json?                                        // 라운드/타이머/턴 인덱스 등
-  shoeJson    Json?                                        // 블랙잭 슈
+  minPlayers  Int          @default(2)          // 블랙잭 최소 2
+  maxPlayers  Int          @default(6)          // 블랙잭 최대 6
+  stateJson   Json?                              // 라운드/타이머/턴 인덱스 등
+  shoeJson    Json?                              // 블랙잭 슈(바카라는 미사용)
   seats       Seat[]
   bets        Bet[]
   createdAt   DateTime     @default(now())
@@ -73,10 +73,28 @@ model Seat {
   table     Table    @relation(fields: [tableId], references: [id], onDelete: Cascade)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([tableId, userId])                              // 중복 착석 방지
+  @@unique([tableId, userId])                  // 동일 테이블 중복 착석 방지
   @@index([userId, joinedAt])
 }
 
-enum GameType   { BLACKJACK BACCARAT SLOTS }
-enum TableStatus{ OPEN RUNNING SETTLING CLOSED }
-enum Outcome    { WIN LOSE PUSH BANKER PLAYER TIE }
+enum GameType {
+  BLACKJACK
+  BACCARAT
+  SLOTS
+}
+
+enum TableStatus {
+  OPEN
+  RUNNING
+  SETTLING
+  CLOSED
+}
+
+enum Outcome {
+  WIN
+  LOSE
+  PUSH
+  BANKER
+  PLAYER
+  TIE
+}

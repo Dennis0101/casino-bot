@@ -1,5 +1,12 @@
-datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
-generator client { provider = "prisma-client-js" }
+// prisma/schema.prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
 
 model User {
   id           String   @id @db.VarChar(32)            // Discord userId
@@ -17,10 +24,10 @@ model User {
 model Bet {
   id          String      @id @default(cuid())
   userId      String
-  tableId     String?                                      // 블랙잭/바카라 라운드 추적(슬롯은 null)
+  tableId     String?                                      // 블랙잭/바카라(슬롯은 null)
   game        GameType
   amount      Int
-  outcome     Outcome                                      // enum으로 고정
+  outcome     Outcome                                      // enum
   odds        Float      @default(1.0)
   delta       Int
   meta        Json?
@@ -33,8 +40,8 @@ model Bet {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   table  Table? @relation(fields: [tableId], references: [id], onDelete: SetNull)
 
-  @@index([userId, createdAt])                             // 유저 랭킹/히스토리
-  @@index([tableId, createdAt])                            // 테이블별 라운드 정산 조회
+  @@index([userId, createdAt])
+  @@index([tableId, createdAt])
   @@index([game, createdAt])
 }
 
@@ -47,11 +54,11 @@ model Table {
   minPlayers  Int          @default(2)                     // 블랙잭 최소 2
   maxPlayers  Int          @default(6)                     // 블랙잭 최대 6
   stateJson   Json?                                        // 라운드/타이머/턴 인덱스 등
-  shoeJson    Json?                                        // 블랙잭 슈(바카라는 사용 X)
+  shoeJson    Json?                                        // 블랙잭 슈
   seats       Seat[]
+  bets        Bet[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
-  bets        Bet[]                                        // 역관계
 
   @@index([channelId])
   @@index([type, status])
@@ -72,4 +79,4 @@ model Seat {
 
 enum GameType   { BLACKJACK BACCARAT SLOTS }
 enum TableStatus{ OPEN RUNNING SETTLING CLOSED }
-enum Outcome    { WIN LOSE PUSH BANKER PLAYER TIE }        // 베팅 결과 표준화
+enum Outcome    { WIN LOSE PUSH BANKER PLAYER TIE }

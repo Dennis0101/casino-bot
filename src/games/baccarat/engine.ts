@@ -2,7 +2,7 @@ import { ThreadAutoArchiveDuration, TextChannel } from "discord.js";
 import { prisma } from "../../db/client.js";
 import { Prisma } from "@prisma/client";
 import { CFG } from "../../config.js";
-import { embedBacLobby, rowBacBet, rowBacMain, rowBacSide } from "./ui.js";
+import { embedBacLobby,rowBacMain, rowBacSide } from "./ui.js";
 
 // ────────────────────────────────
 // 카드/슈/유틸

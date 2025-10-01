@@ -3,10 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts",
+    "dev": "tsx --enable-source-maps src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "prestart": "prisma migrate deploy || prisma db push",
+    "start": "node --enable-source-maps dist/index.js",
     "db:push": "prisma db push",
+    "db:migrate:dev": "prisma migrate dev --name init",
+    "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "deploy:cmds": "tsx scripts/deploy-commands.ts",
     "postinstall": "prisma generate"
@@ -22,5 +25,7 @@
     "tsx": "^4.19.1",
     "typescript": "^5.6.3"
   },
-  "engines": { "node": ">=18" }
+  "engines": {
+    "node": ">=18"
+  }
 }

@@ -1,46 +1,65 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from "discord.js";
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+} from "discord.js";
 import { makeId } from "../../utils/ids.js";
 
-export const embedBacLobby = (leftSec: number) =>
-  new EmbedBuilder()
-    .setTitle("🎴 바카라 베팅")
+// ---------------------
+// 바카라 로비 임베드
+// ---------------------
+export function embedBacLobby() {
+  return new EmbedBuilder()
+    .setTitle("🀄 바카라 게임")
     .setDescription(
-      [
-        `⏱️ 종료까지 **${leftSec}s**`,
-        "",
-        "메인: PLAYER / BANKER / TIE",
-        "사이드: PLAYER_PAIR / BANKER_PAIR",
-      ].join("\n")
-    );
+      "플레이어 또는 뱅커에 베팅하세요!\n" +
+        "추가로 사이드 배팅도 가능합니다.\n\n" +
+        "⏱️ 충분한 베팅 시간이 주어집니다."
+    )
+    .setFooter({ text: "바카라 규칙 준수 / 사이드 배팅 포함" });
+}
 
-export const rowBacMain = (tableId: string) =>
-  new ActionRowBuilder<ButtonBuilder>().addComponents(
+// ---------------------
+// 메인 베팅 버튼 (플레이어 / 뱅커 / 타이)
+// ---------------------
+export function rowBacMain() {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(makeId("bac", "betMain", tableId, "PLAYER", "100"))
-      .setLabel("PLAYER +100")
+      .setCustomId(makeId("bac", "bet", "PLAYER"))
+      .setLabel("👤 플레이어")
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
-      .setCustomId(makeId("bac", "betMain", tableId, "BANKER", "100"))
-      .setLabel("BANKER +100")
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(makeId("bac", "betMain", tableId, "TIE", "50"))
-      .setLabel("TIE +50")
-      .setStyle(ButtonStyle.Secondary),
-  );
-
-export const rowBacSide = (tableId: string) =>
-  new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(makeId("bac", "betSide", tableId, "PLAYER_PAIR", "50"))
-      .setLabel("PLAYER_PAIR +50")
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(makeId("bac", "betSide", tableId, "BANKER_PAIR", "50"))
-      .setLabel("BANKER_PAIR +50")
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(makeId("bac", "clear", tableId))
-      .setLabel("CLEAR")
+      .setCustomId(makeId("bac", "bet", "BANKER"))
+      .setLabel("🏦 뱅커")
       .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId(makeId("bac", "bet", "TIE"))
+      .setLabel("⚖️ 타이")
+      .setStyle(ButtonStyle.Secondary)
   );
+}
+
+// ---------------------
+// 사이드 베팅 버튼 (페어, 빅/스몰 등)
+// ---------------------
+export function rowBacSide() {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(makeId("bac", "side", "PLAYER_PAIR"))
+      .setLabel("👥 플레이어 페어")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(makeId("bac", "side", "BANKER_PAIR"))
+      .setLabel("🏦 뱅커 페어")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(makeId("bac", "side", "BIG"))
+      .setLabel("⬆️ 빅 (총합 ≥ 5장)")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(makeId("bac", "side", "SMALL"))
+      .setLabel("⬇️ 스몰 (총합 4장)")
+      .setStyle(ButtonStyle.Secondary)
+  );
+}

@@ -5,15 +5,21 @@ import {
 } from 'discord.js';
 import { PrismaClient, Prisma } from '@prisma/client';
 
+// ▼ 엔진 핸들러 연결 (중요)
+import { handleBJButton }  from './games/blackjack/engine.js';
+import { handleBacButton } from './games/baccarat/engine.js';
+
 const prisma = new PrismaClient();
 
 const client = new Client({
-  // ✅ 버튼/인터랙션만 사용 → Guilds 하나면 충분
   intents: [GatewayIntentBits.Guilds],
-  partials: [Partials.Channel], // 스레드/채널 일부 로딩 시 유용. 불필요하면 제거 가능
+  partials: [Partials.Channel],
 });
 
-// (선택) 실제 인텐트 비트 확인용 로그: Guilds만이면 1 또는 1n
+// 전역 client 노출 → 엔진에서 스레드 채널 접근용
+(globalThis as any).discordClient = client;
+
+// (선택) 실제 인텐트 비트 확인
 console.log('Intents bitfield:', new IntentsBitField([GatewayIntentBits.Guilds]).bitfield);
 
 // ----------------------
@@ -58,7 +64,7 @@ async function sendLobby(channel: TextChannel) {
 }
 
 // ----------------------
-// 슬롯: 버튼 패널 + 스핀 처리
+// 슬롯
 // ----------------------
 const SYMBOLS = ['🍒','🍋','🔔','⭐','7️⃣','💎'];
 const lastHit = new Map<string, number>(); // 간단 쿨다운
@@ -138,7 +144,7 @@ async function handleSlots(i: ButtonInteraction, action: string, rest: string[])
 }
 
 // ----------------------
-// 간단 헬스체크
+// 헬스체크 & 로비 자동 게시
 // ----------------------
 async function healthCheck() {
   try {
@@ -153,7 +159,6 @@ client.once('ready', async () => {
   console.log(`🤖 Logged in as ${client.user?.tag ?? '(no user)'}`);
   await healthCheck();
 
-  // ✅ 자동 로비 게시 (슬래시/프리픽스 없이 시작)
   const lobbyChannelId = process.env.LOBBY_CHANNEL_ID;
   if (lobbyChannelId) {
     try {
@@ -173,7 +178,7 @@ client.once('ready', async () => {
 });
 
 // ----------------------
-// 버튼 라우팅 (슬래시/프리픽스 없이 버튼만)
+// 버튼 라우팅 (엔진 연결 완료)
 // ----------------------
 client.on('interactionCreate', async (i: Interaction) => {
   if (!i.isButton()) return;
@@ -224,15 +229,11 @@ client.on('interactionCreate', async (i: Interaction) => {
     }
 
     // 슬롯
-    if (scope === 'slots') return handleSlots(i, action, rest);
+    if (scope === 'slots') return handleSlots(i as ButtonInteraction, action, rest);
 
-    // 블랙잭/바카라 자리표 오픈 (엔진 연결 전)
-    if (scope === 'bj' && action === 'open') {
-      return i.reply({ ephemeral: true, content: '🂡 블랙잭 테이블이 곧 열립니다! (엔진 연결 예정)' });
-    }
-    if (scope === 'bac' && action === 'open') {
-      return i.reply({ ephemeral: true, content: '🀄 바카라 허브가 곧 열립니다! (라운드 연결 예정)' });
-    }
+    // ★ 엔진 연결: 블랙잭 / 바카라
+    if (scope === 'bj')  return handleBJButton(i as ButtonInteraction, action, rest);
+    if (scope === 'bac') return handleBacButton(i as ButtonInteraction, action, rest);
 
   } catch (e: any) {
     console.error('interaction error', e);
@@ -242,7 +243,7 @@ client.on('interactionCreate', async (i: Interaction) => {
   }
 });
 
-// 전역 에러 핸들링 (권장)
+// 전역 에러 핸들링
 process.on('unhandledRejection', (err) => {
   console.error('UNHANDLED REJECTION:', err);
 });
@@ -252,12 +253,8 @@ process.on('uncaughtException', (err) => {
 
 // 종료 시 클린업
 async function gracefulExit(code = 0) {
-  try {
-    await client.destroy();
-  } catch {}
-  try {
-    await prisma.$disconnect();
-  } catch {}
+  try { await client.destroy(); } catch {}
+  try { await prisma.$disconnect(); } catch {}
   process.exit(code);
 }
 process.on('SIGINT', () => gracefulExit(0));
@@ -266,7 +263,6 @@ process.on('SIGTERM', () => gracefulExit(0));
 const token = process.env.BOT_TOKEN;
 if (!token) {
   console.error('❌ BOT_TOKEN is missing in .env');
-  // Prisma 커넥션 닫고 종료
   prisma.$disconnect().finally(() => process.exit(1));
 } else {
   client.login(token).catch((e) => {

@@ -1,9 +1,9 @@
 import { ThreadAutoArchiveDuration, TextChannel, Message } from "discord.js";
-import { prisma } from "../../db/client.js";
+import { prisma } from "../../db/client.ts";
 import { Prisma } from "@prisma/client";
-import { CFG } from "../../config.js";
+import { CFG } from "../../config.ts";
 import { embedBacRoundIntro, rowBacMain, rowBacSide, rowAmountNudge } from "./ui.js";
-import { runCountdownEmbed } from "../../utils/timer.js";
+import { runCountdownEmbed } from "../../utils/timer.ts";
 
 /* ===== 카드/슈 ===== */
 const RANKS = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"];

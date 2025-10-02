@@ -1,61 +1,39 @@
-import { ThreadAutoArchiveDuration, TextChannel, Message } from "discord.js";
+import { ThreadAutoArchiveDuration, TextChannel } from "discord.js";
 import { prisma } from "../../db/client.js";
 import { Prisma } from "@prisma/client";
 import { CFG } from "../../config.js";
 import { embedBacRoundIntro, rowBacMain, rowBacSide, rowAmountNudge } from "./ui.js";
 import { runCountdownEmbed } from "../../utils/timer.js";
+import type { BacState, BetsBucket, LastTarget, MainKey, SideKey } from "./types.js";
 
 /* ===== 카드/슈 ===== */
 const RANKS = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"];
 const SUITS = ["♠","♥","♦","♣"];
-const CARD_VALUE: Record<string, number> = {
-  "A": 1, "2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,
-  "10":0,"J":0,"Q":0,"K":0,
-};
+const CV: Record<string, number> = { A:1, "2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9, "10":0,"J":0,"Q":0,"K":0 };
+
 function buildShoe(decks = CFG.BAC_DECKS) {
   const shoe: string[] = [];
   for (let d=0; d<decks; d++)
     for (const r of RANKS) for (const s of SUITS) shoe.push(`${r}${s}`);
-  for (let i=shoe.length-1;i>0;i--){
-    const j = Math.floor(Math.random()*(i+1));
-    [shoe[i], shoe[j]] = [shoe[j], shoe[i]];
-  }
+  for (let i=shoe.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [shoe[i], shoe[j]]=[shoe[j], shoe[i]]; }
   return shoe;
 }
-const v = (card:string)=> CARD_VALUE[card.replace(/[♠♥♦♣]/g,"")];
-const score = (cards:string[]) => cards.reduce((a,c)=> (a + v(c)) % 10, 0);
-const isPair = (cards:string[]) => cards.length>=2
-  && cards[0].replace(/[♠♥♦♣]/g,"") === cards[1].replace(/[♠♥♦♣]/g,"");
+const val = (c:string)=> CV[c.replace(/[♠♥♦♣]/g,"")];
+const sc  = (cards:string[]) => cards.reduce((a,c)=> (a + val(c)) % 10, 0);
+const isPair = (cards:string[]) => cards.length>=2 && cards[0].replace(/[♠♥♦♣]/g,"") === cards[1].replace(/[♠♥♦♣]/g,"");
 
-/* ===== 타입/상태 ===== */
-type SideKey = "PLAYER_PAIR" | "BANKER_PAIR";
-type MainKey = "PLAYER" | "BANKER" | "TIE";
-
-type BetsBucket = {
-  main: Record<string, Partial<Record<MainKey, number>>>;
-  side: Record<string, Partial<Record<SideKey, number>>>;
-};
-
-type LastTarget = Record<string, { kind: "MAIN"|"SIDE"; key: MainKey | SideKey }>;
-
-type BacState =
-  | { phase:"BETTING"; until:number; bets: BetsBucket; lastTarget: LastTarget }
-  | { phase:"DEAL"; P:string[]; B:string[]; bets: BetsBucket }
-  | { phase:"SETTLE" };
-
+/* ===== 페이아웃(총지급) ===== */
 const PAYOUT_MAIN: Record<MainKey, number> = {
-  PLAYER: CFG.PAYOUTS?.PLAYER ?? 2.0,
-  BANKER: CFG.PAYOUTS?.BANKER ?? 1.95,
-  TIE:    CFG.PAYOUTS?.TIE    ?? 9.0,
+  PLAYER: CFG.PAYOUTS.PLAYER,
+  BANKER: CFG.PAYOUTS.BANKER,
+  TIE:    CFG.PAYOUTS.TIE,
 };
 const PAYOUT_SIDE: Record<SideKey, number> = {
-  PLAYER_PAIR: CFG.PAYOUTS?.PLAYER_PAIR ?? 12.0,
-  BANKER_PAIR: CFG.PAYOUTS?.BANKER_PAIR ?? 12.0,
+  PLAYER_PAIR: CFG.PAYOUTS.PLAYER_PAIR,
+  BANKER_PAIR: CFG.PAYOUTS.BANKER_PAIR,
 };
 
-const hubs = new Set<string>();
-
-/* ===== 허브 생성 ===== */
+/* ===== 허브 만들기 ===== */
 export async function openHub(channel: TextChannel) {
   const thread = await channel.threads.create({
     name: "🎴 바카라",
@@ -65,97 +43,81 @@ export async function openHub(channel: TextChannel) {
 
   const table = await prisma.table.create({
     data: {
-      type:"BACCARAT",
-      status:"OPEN",
+      type: "BACCARAT",
+      status: "OPEN",
       channelId: thread.id,
       minPlayers: 2,
       maxPlayers: 999,
       shoeJson: buildShoe(),
-    }
+    },
   });
 
   await startBetting(table.id);
 }
 
-/* ===== 루프 ===== */
-export function ensureHubLoop(tableId: string) {
-  if (hubs.has(tableId)) return;
-  hubs.add(tableId);
-  (async function run(){
-    try { await step(tableId); }
-    catch (e) { console.error("BAC step error", e); }
-    finally { setTimeout(() => ensureHubLoop(tableId), 1000); }
-  })();
-}
-
 /* ===== 라운드 시작(베팅) ===== */
 async function startBetting(tableId: string) {
   const until = Date.now() + (CFG.BAC_BET_SEC ?? 25) * 1000;
-  const state: BacState = { phase:"BETTING", until, bets: { main:{}, side:{} }, lastTarget:{} };
+  const state: BacState = { phase: "BETTING", until, bets: { main:{}, side:{} }, lastTarget:{} };
 
-  await prisma.table.update({
-    where:{ id: tableId },
-    data:{ status:"RUNNING", stateJson: state }
-  });
-
+  await prisma.table.update({ where:{ id: tableId }, data:{ status:"RUNNING", stateJson: state }});
   const t = await prisma.table.findUnique({ where:{ id: tableId }});
   if (!t) return;
+
   const ch = await (globalThis as any).discordClient.channels.fetch(t.channelId) as TextChannel;
+  const msg = await ch.send({ embeds: [embedBacRoundIntro(CFG.BAC_BET_SEC ?? 25)], components: [rowBacMain(tableId), rowBacSide(tableId), rowAmountNudge(tableId)] });
 
-  // 안내 메시지 + 버튼
-  const msg = await ch.send({
-    content: "배팅을 시작하세요!",
-    embeds: [embedBacRoundIntro(CFG.BAC_BET_SEC ?? 25)],
-    components: [rowBacMain(tableId), rowBacSide(tableId), rowAmountNudge(tableId)],
-  });
-
-  // 실시간 카운트다운(임베드)
   await runCountdownEmbed(msg, CFG.BAC_BET_SEC ?? 25, "🀄 베팅 카운트다운", async () => {
     await ch.send("⛔ 베팅 마감! 딜링 중…");
-    await dealAndSettle(tableId, ch);
+    await deal(tableId, ch);
   });
-
-  ensureHubLoop(tableId);
 }
 
-/* ===== 틱 ===== */
-async function step(tableId: string) {
-  const t = await prisma.table.findUnique({ where:{ id: tableId }});
-  if (!t) return;
-  const st = t.stateJson as BacState | null;
-  if (!st) return;
-
-  if (st.phase === "SETTLE") {
-    // 다음 라운드
-    await startBetting(tableId);
-    return;
-  }
-}
-
-/* ===== 딜/정산 ===== */
-async function dealAndSettle(tableId: string, ch: TextChannel) {
+/* ===== 딜링 + 애니메이션 ===== */
+async function deal(tableId: string, ch: TextChannel) {
   const t = await prisma.table.findUnique({ where:{ id: tableId }});
   if (!t) return;
 
   let shoe = Array.isArray(t.shoeJson) ? (t.shoeJson as string[]) : buildShoe();
-  if (shoe.length <= 10) shoe = buildShoe();
+  if (shoe.length < 12) shoe = buildShoe();
 
-  const st = t.stateJson as Extract<BacState,{phase:"BETTING"}>;
+  const st = t.stateJson as Extract<BacState, { phase: "BETTING" }>;
   if (!st || st.phase !== "BETTING") return;
 
-  // 카드 배분
+  // 첫 4장
   const P: string[] = [shoe.pop()!, shoe.pop()!];
   const B: string[] = [shoe.pop()!, shoe.pop()!];
-  let pT = score(P), bT = score(B);
+
+  await prisma.table.update({ where:{ id: tableId }, data:{ stateJson: { phase:"DEALING", P, B, bets: st.bets }, shoeJson: shoe }});
+
+  // 애니메이션: 숨긴 카드 → 순차 오픈
+  const fmt = (p: string[], b: string[], hideP = 0, hideB = 0) =>
+    `🂠 PLAYER: ${p.map((c,idx)=> idx<hideP ? "🂠" : c).join(" ")}\n🂠 BANKER: ${b.map((c,idx)=> idx<hideB ? "🂠" : c).join(" ")}`;
+
+  const m = await ch.send("🃏 카드를 배분합니다…");
+  await sleep(400);
+  await m.edit(fmt([P[0]], [], 0, 0));
+  await sleep(400);
+  await m.edit(fmt([P[0]], [B[0]], 0, 0));
+  await sleep(400);
+  await m.edit(fmt(P, [B[0]], 0, 0));
+  await sleep(400);
+  await m.edit(fmt(P, B, 0, 0));
+
+  // 규칙에 따라 3카드
+  let pT = sc(P), bT = sc(B);
   const natural = pT >= 8 || bT >= 8;
 
   if (!natural) {
     const pDraw = pT <= 5;
+    let p3: string | undefined;
     let p3v: number | undefined;
     if (pDraw) {
-      const pc = shoe.pop()!; P.push(pc); pT = score(P); p3v = v(pc);
+      p3 = shoe.pop()!; P.push(p3); p3v = val(p3); pT = sc(P);
+      await sleep(600);
+      await m.edit(fmt(P, B, 0, 0));
     }
-    const bankerDraw = (() => {
+    const bDraw = (() => {
       if (!pDraw) return bT <= 5;
       if (bT <= 2) return true;
       if (bT === 3) return p3v !== 8;
@@ -164,210 +126,178 @@ async function dealAndSettle(tableId: string, ch: TextChannel) {
       if (bT === 6) return p3v! === 6 || p3v! === 7;
       return false;
     })();
-    if (bankerDraw) {
-      const bc = shoe.pop()!; B.push(bc); bT = score(B);
+    if (bDraw) {
+      const bc = shoe.pop()!; B.push(bc); bT = sc(B);
+      await sleep(600);
+      await m.edit(fmt(P, B, 0, 0));
     }
   }
 
-  // DEAL 상태 반영
-  await prisma.table.update({
-    where:{ id: tableId },
-    data:{ stateJson: { phase:"DEAL", P, B, bets: st.bets }, shoeJson: shoe }
-  });
+  await prisma.table.update({ where:{ id: tableId }, data:{ stateJson: { phase:"SHOW", P, B, bets: st.bets }, shoeJson: shoe }});
+  await showAndSettle(tableId, ch);
+}
 
-  // 정산
+async function showAndSettle(tableId: string, ch: TextChannel) {
+  const t = await prisma.table.findUnique({ where:{ id: tableId }});
+  if (!t) return;
+  const st = t.stateJson as Extract<BacState, { phase: "SHOW" }>;
+  if (!st || st.phase !== "SHOW") return;
+
+  const { P, B } = st;
+  const pT = sc(P), bT = sc(B);
   const winner: MainKey = pT > bT ? "PLAYER" : (bT > pT ? "BANKER" : "TIE");
   const pPair = isPair(P), bPair = isPair(B);
 
   const lines = [
-    `🂠 PLAYER: ${P.join(" ")} (=${pT})`,
-    `🂠 BANKER: ${B.join(" ")} (=${bT})`,
-    `🏁 결과: **${winner}**  |  사이드: P_PAIR=${pPair ? "O" : "X"} / B_PAIR=${bPair ? "O" : "X"}`
+    `🂡 PLAYER: ${P.join(" ")} (=${pT})`,
+    `🂡 BANKER: ${B.join(" ")} (=${bT})`,
+    `🏁 결과: **${winner}** / 사이드: P_PAIR=${pPair?"O":"X"} · B_PAIR=${bPair?"O":"X"}`
   ];
-
   await ch.send(lines.join("\n"));
 
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    // 유저별 베팅 합계 확인 → 잔액 부족 시 해당 유저 베팅 스킵(취소)
-    const userIds = new Set<string>([
-      ...Object.keys(st.bets.main),
-      ...Object.keys(st.bets.side),
-    ]);
+    const bets = st.bets;
+    const userIds = new Set<string>([...Object.keys(bets.main), ...Object.keys(bets.side)]);
 
     for (const uid of userIds) {
       const u = await tx.user.findUnique({ where:{ id: uid }});
       if (!u) continue;
 
-      const main = st.bets.main[uid] || {};
-      const side = st.bets.side[uid] || {};
+      const main = bets.main[uid] || {};
+      const side = bets.side[uid] || {};
       const mainSum = (main.PLAYER||0)+(main.BANKER||0)+(main.TIE||0);
       const sideSum = (side.PLAYER_PAIR||0)+(side.BANKER_PAIR||0);
-      const totalStake = mainSum + sideSum;
+      const stake = mainSum + sideSum;
+      if (stake <= 0) continue;
 
-      if (totalStake <= 0) continue;
-      if (u.balance < totalStake) {
-        // 잔액 부족: 스킵(실패 알림)
-        await ch.send(`<@${uid}> 베팅 취소(잔액 부족): ${totalStake}`);
+      if (u.balance < stake) {
+        await ch.send(`<@${uid}> 베팅 취소(잔액 부족): ${stake}`);
         continue;
       }
 
-      // 먼저 스테이크 차감
-      await tx.user.update({ where:{ id: uid }, data:{ balance: { decrement: totalStake } }});
+      // 선 차감
+      await tx.user.update({ where:{ id: uid }, data:{ balance: { decrement: stake }}});
 
-      // 메인 정산
-      for (const sideKey of ["PLAYER","BANKER","TIE"] as MainKey[]) {
-        const amt = main[sideKey] || 0;
-        if (!amt) continue;
-        const hit = (sideKey === winner);
-        const odds = hit ? PAYOUT_MAIN[sideKey] : 0;
-        const delta = hit ? Math.floor(amt * odds) : 0;  // 배당금(스테이크 포함 아님)
-        if (delta) {
-          await tx.user.update({ where:{ id: uid }, data:{ balance: { increment: delta } }});
-        }
+      // 메인
+      for (const k of ["PLAYER","BANKER","TIE"] as MainKey[]) {
+        const amt = main[k] || 0; if (!amt) continue;
+        const hit = (k === winner);
+        const payout = hit ? Math.floor(amt * PAYOUT_MAIN[k]) : 0; // 총지급
+        const net = payout - amt; // 순이익
+
+        if (payout) await tx.user.update({ where:{ id: uid }, data:{ balance: { increment: payout } }});
         await tx.bet.create({
-          data: {
-            userId: uid, tableId, game:"BACCARAT",
-            amount: amt,
-            outcome: sideKey,
-            odds: odds,
-            delta: (delta - 0), // 기록용(실지급액)
-            meta: { P, B, pT, bT, winner, type: "MAIN" }
-          }
+          data: { userId: uid, tableId, game:"BACCARAT", amount: amt, outcome: k, odds: PAYOUT_MAIN[k], delta: net, meta: { P,B,pT,bT,winner,type:"MAIN" } }
         });
       }
 
-      // 사이드 정산
-      const sidePP = side.PLAYER_PAIR || 0;
-      if (sidePP) {
-        const hit = pPair; const odds = hit ? PAYOUT_SIDE.PLAYER_PAIR : 0;
-        const delta = hit ? Math.floor(sidePP * odds) : 0;
-        if (delta) await tx.user.update({ where:{ id: uid }, data:{ balance: { increment: delta } }});
+      // 사이드
+      const sPP = side.PLAYER_PAIR || 0;
+      if (sPP) {
+        const hit = pPair; const payout = hit ? Math.floor(sPP * PAYOUT_SIDE.PLAYER_PAIR) : 0;
+        const net = payout - sPP;
+        if (payout) await tx.user.update({ where:{ id: uid }, data:{ balance: { increment: payout } }});
         await tx.bet.create({
-          data: {
-            userId: uid, tableId, game:"BACCARAT",
-            amount: sidePP, outcome: "PLAYER",
-            odds, delta,
-            meta: { P, B, pT, bT, winner, type: "PLAYER_PAIR" }
-          }
+          data: { userId: uid, tableId, game:"BACCARAT", amount: sPP, outcome:"PLAYER", odds:PAYOUT_SIDE.PLAYER_PAIR, delta: net, meta:{P,B,pT,bT,winner,type:"PLAYER_PAIR"} }
         });
       }
-      const sideBP = side.BANKER_PAIR || 0;
-      if (sideBP) {
-        const hit = bPair; const odds = hit ? PAYOUT_SIDE.BANKER_PAIR : 0;
-        const delta = hit ? Math.floor(sideBP * odds) : 0;
-        if (delta) await tx.user.update({ where:{ id: uid }, data:{ balance: { increment: delta } }});
+      const sBP = side.BANKER_PAIR || 0;
+      if (sBP) {
+        const hit = bPair; const payout = hit ? Math.floor(sBP * PAYOUT_SIDE.BANKER_PAIR) : 0;
+        const net = payout - sBP;
+        if (payout) await tx.user.update({ where:{ id: uid }, data:{ balance: { increment: payout } }});
         await tx.bet.create({
-          data: {
-            userId: uid, tableId, game:"BACCARAT",
-            amount: sideBP, outcome: "BANKER",
-            odds, delta,
-            meta: { P, B, pT, bT, winner, type: "BANKER_PAIR" }
-          }
+          data: { userId: uid, tableId, game:"BACCARAT", amount: sBP, outcome:"BANKER", odds:PAYOUT_SIDE.BANKER_PAIR, delta: net, meta:{P,B,pT,bT,winner,type:"BANKER_PAIR"} }
         });
       }
     }
 
-    await tx.table.update({
-      where:{ id: tableId },
-      data:{ status:"OPEN", stateJson: { phase:"SETTLE" } }
-    });
+    // COOLDOWN → BETTING
+    const until = Date.now() + (Number(process.env.BACCARAT_COOLDOWN_SECONDS ?? 5) * 1000);
+    await tx.table.update({ where:{ id: tableId }, data:{ stateJson: { phase:"COOLDOWN", until }, status: "OPEN" }});
   });
+
+  // 5초 뒤 다음 라운드
+  setTimeout(() => startBetting(tableId), Number(process.env.BACCARAT_COOLDOWN_SECONDS ?? 5) * 1000);
 }
 
-/* ===== 버튼 핸들러 ===== */
+/* ===== 버튼 라우팅 ===== */
 export async function handleBacButton(i:any, action:string, rest:string[]){
   if (action === "open") {
-    if (!i.channel?.isTextBased())
-      return i.reply({ ephemeral: true, content: "텍스트 채널에서만 가능" });
+    if (!i.channel?.isTextBased()) return i.reply({ ephemeral:true, content:"텍스트 채널에서만 가능" });
     await openHub(i.channel as TextChannel);
-    return i.reply({ ephemeral: true, content: "바카라 허브를 열었습니다!" });
+    return i.reply({ ephemeral:true, content:"바카라 허브 오픈!" });
   }
 
-  // 메인 베팅(누적)
+  // 공통 유틸
+  const getBettingState = async (tableId:string) => {
+    const t = await prisma.table.findUnique({ where:{ id: tableId }});
+    const st = t?.stateJson as BacState | null;
+    if (!t || !st || st.phase !== "BETTING") return null;
+    return { t, st };
+  };
+
+  // 메인 베팅
   if (action === "betMain") {
-    const [tableId, side, incStr] = rest as [string, MainKey, string];
+    const [tableId, key, incStr] = rest as [string, MainKey, string];
     const inc = Number(incStr||"0");
-    if (!Number.isFinite(inc) || inc <= 0)
-      return i.reply({ ephemeral:true, content:"잘못된 금액" });
+    const ctx = await getBettingState(tableId);
+    if (!ctx) return i.reply({ ephemeral:true, content:"지금은 베팅 시간이 아님" });
 
-    const t = await prisma.table.findUnique({ where:{ id: tableId }});
-    if (!t) return i.reply({ ephemeral:true, content:"허브 없음" });
-    const st = t.stateJson as BacState | null;
-    if (!st || st.phase !== "BETTING")
-      return i.reply({ ephemeral:true, content:"지금은 베팅 시간이 아님" });
-
-    st.bets.main[i.user.id] = st.bets.main[i.user.id] || {};
-    st.bets.main[i.user.id][side] = (st.bets.main[i.user.id][side] || 0) + inc;
-    st.lastTarget[i.user.id] = { kind:"MAIN", key: side };
-    await prisma.table.update({ where:{ id: tableId }, data:{ stateJson: st }});
-
-    return i.reply({ ephemeral:true, content: `${side}에 +${inc} 누적` });
+    ctx.st.bets.main[i.user.id] = ctx.st.bets.main[i.user.id] || {};
+    ctx.st.bets.main[i.user.id][key] = (ctx.st.bets.main[i.user.id][key] || 0) + inc;
+    ctx.st.lastTarget[i.user.id] = { kind:"MAIN", key };
+    await prisma.table.update({ where:{ id: tableId }, data:{ stateJson: ctx.st }});
+    return i.reply({ ephemeral:true, content:`${key} +${inc}` });
   }
 
-  // 사이드 베팅(누적)
+  // 사이드 베팅
   if (action === "betSide") {
-    const [tableId, side, incStr] = rest as [string, SideKey, string];
+    const [tableId, key, incStr] = rest as [string, SideKey, string];
     const inc = Number(incStr||"0");
-    if (!Number.isFinite(inc) || inc <= 0)
-      return i.reply({ ephemeral:true, content:"잘못된 금액" });
+    const ctx = await getBettingState(tableId);
+    if (!ctx) return i.reply({ ephemeral:true, content:"지금은 베팅 시간이 아님" });
 
-    const t = await prisma.table.findUnique({ where:{ id: tableId }});
-    if (!t) return i.reply({ ephemeral:true, content:"허브 없음" });
-    const st = t.stateJson as BacState | null;
-    if (!st || st.phase !== "BETTING")
-      return i.reply({ ephemeral:true, content:"지금은 베팅 시간이 아님" });
-
-    st.bets.side[i.user.id] = st.bets.side[i.user.id] || {};
-    st.bets.side[i.user.id][side] = (st.bets.side[i.user.id][side] || 0) + inc;
-    st.lastTarget[i.user.id] = { kind:"SIDE", key: side };
-    await prisma.table.update({ where:{ id: tableId }, data:{ stateJson: st }});
-
-    return i.reply({ ephemeral:true, content: `${side}에 +${inc} 누적` });
+    ctx.st.bets.side[i.user.id] = ctx.st.bets.side[i.user.id] || {};
+    ctx.st.bets.side[i.user.id][key] = (ctx.st.bets.side[i.user.id][key] || 0) + inc;
+    ctx.st.lastTarget[i.user.id] = { kind:"SIDE", key };
+    await prisma.table.update({ where:{ id: tableId }, data:{ stateJson: ctx.st }});
+    return i.reply({ ephemeral:true, content:`${key} +${inc}` });
   }
 
-  // 마지막 타겟에 증/감 (예: +50, -100)
+  // 증/감
   if (action === "nudge") {
-    const [deltaStr, tableId] = rest; // ex) +50 / -100
+    const [deltaStr, tableId] = rest;
     const delta = Number(deltaStr);
-    if (!Number.isFinite(delta) || delta === 0)
-      return i.reply({ ephemeral:true, content:"잘못된 증감 값" });
-
-    const t = await prisma.table.findUnique({ where:{ id: tableId }});
-    if (!t) return i.reply({ ephemeral:true, content:"허브 없음" });
-    const st = t.stateJson as BacState | null;
-    if (!st || st.phase !== "BETTING")
-      return i.reply({ ephemeral:true, content:"지금은 베팅 시간이 아님" });
-
-    const target = st.lastTarget[i.user.id];
+    const ctx = await getBettingState(tableId);
+    if (!ctx) return i.reply({ ephemeral:true, content:"지금은 베팅 시간이 아님" });
+    const target = ctx.st.lastTarget[i.user.id];
     if (!target) return i.reply({ ephemeral:true, content:"먼저 타겟(메인/사이드)을 선택하세요" });
 
     if (target.kind === "MAIN") {
       const key = target.key as MainKey;
-      st.bets.main[i.user.id] = st.bets.main[i.user.id] || {};
-      const next = Math.max(0, (st.bets.main[i.user.id][key] || 0) + delta);
-      st.bets.main[i.user.id][key] = next;
+      ctx.st.bets.main[i.user.id] = ctx.st.bets.main[i.user.id] || {};
+      ctx.st.bets.main[i.user.id][key] = Math.max(0, (ctx.st.bets.main[i.user.id][key] || 0) + delta);
     } else {
       const key = target.key as SideKey;
-      st.bets.side[i.user.id] = st.bets.side[i.user.id] || {};
-      const next = Math.max(0, (st.bets.side[i.user.id][key] || 0) + delta);
-      st.bets.side[i.user.id][key] = next;
+      ctx.st.bets.side[i.user.id] = ctx.st.bets.side[i.user.id] || {};
+      ctx.st.bets.side[i.user.id][key] = Math.max(0, (ctx.st.bets.side[i.user.id][key] || 0) + delta);
     }
-    await prisma.table.update({ where:{ id: tableId }, data:{ stateJson: st }});
-    return i.reply({ ephemeral:true, content:`마지막 타겟에 ${delta>0?'+':''}${delta}` });
+    await prisma.table.update({ where:{ id: tableId }, data:{ stateJson: ctx.st }});
+    return i.reply({ ephemeral:true, content:`${delta>0?'+':''}${delta}` });
   }
 
   if (action === "clear") {
     const [tableId] = rest;
-    const t = await prisma.table.findUnique({ where:{ id: tableId }});
-    if (!t) return i.reply({ ephemeral:true, content:"허브 없음" });
-    const st = t.stateJson as BacState | null;
-    if (!st || st.phase !== "BETTING")
-      return i.reply({ ephemeral:true, content:"지금은 베팅 시간이 아님" });
-
-    delete st.bets.main[i.user.id];
-    delete st.bets.side[i.user.id];
-    delete st.lastTarget[i.user.id];
-    await prisma.table.update({ where:{ id: tableId }, data:{ stateJson: st }});
+    const ctx = await getBettingState(tableId);
+    if (!ctx) return i.reply({ ephemeral:true, content:"지금은 베팅 시간이 아님" });
+    delete ctx.st.bets.main[i.user.id];
+    delete ctx.st.bets.side[i.user.id];
+    delete ctx.st.lastTarget[i.user.id];
+    await prisma.table.update({ where:{ id: tableId }, data:{ stateJson: ctx.st }});
     return i.reply({ ephemeral:true, content:"내 베팅 초기화" });
   }
 }
+
+/* ===== util ===== */
+const sleep = (ms:number)=> new Promise(r=>setTimeout(r, ms));

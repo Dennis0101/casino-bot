@@ -8,43 +8,57 @@ generator client {
   provider = "prisma-client-js"
 }
 
+/* ======================
+   User / Wallet / Bets
+   ====================== */
 model User {
-  id           String   @id @db.VarChar(32) // Discord userId
-  balance      Int      @default(1000)
+  id           String    @id @db.VarChar(32) // Discord userId
+  balance      Int       @default(1000)
   dailyClaimed DateTime?
-  banned       Boolean  @default(false)
-  clientSeed   String?  // 공정성용(선택)
-  createdAt    DateTime @default(now())
+  banned       Boolean   @default(false)
+  bannedUntil  DateTime?                       // 일정 기간 차단
+  clientSeed   String?                         // 공정성용 (선택)
+  createdAt    DateTime  @default(now())
+
   bets         Bet[]
   seats        Seat[]
+  walletTxs    WalletTx[]
 
   @@index([createdAt])
+  @@index([balance])
+  @@index([banned])
 }
 
 model Bet {
-  id          String      @id @default(cuid())
+  id          String     @id @default(cuid())
   userId      String
-  tableId     String?                           // 블랙잭/바카라 라운드 추적(슬롯은 null)
+  tableId     String?
+  roundId     String?
   game        GameType
   amount      Int
   outcome     Outcome
-  odds        Float       @default(1.0)         // 배당 기록(검증용)
-  delta       Int
-  meta        Json?                              // 카드/슬롯 릴 등 상세
-  commitHash  String?                            // commit → reveal
+  odds        Float      @default(1.0)         // 총지급배수
+  delta       Int                               // 순손익
+  meta        Json?       @db.JsonB
+  commitHash  String?
   serverSeed  String?
   clientSeed  String?
   nonce       Int?
-  createdAt   DateTime    @default(now())
+  createdAt   DateTime   @default(now())
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   table  Table? @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  round  GameRound? @relation(fields: [roundId], references: [id], onDelete: SetNull)
 
   @@index([userId, createdAt])
   @@index([tableId, createdAt])
   @@index([game, createdAt])
+  @@index([roundId])
 }
 
+/* ======================
+   Tables / Seats / Rounds
+   ====================== */
 model Table {
   id          String       @id @default(cuid())
   type        GameType
@@ -53,15 +67,18 @@ model Table {
   messageId   String?
   minPlayers  Int          @default(2)
   maxPlayers  Int          @default(6)
-  stateJson   Json?
-  shoeJson    Json?
-  seats       Seat[]
-  bets        Bet[]
+  stateJson   Json?        @db.JsonB
+  shoeJson    Json?        @db.JsonB
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
+  seats       Seat[]
+  bets        Bet[]
+  rounds      GameRound[]
+
   @@index([channelId])
   @@index([type, status])
+  @@unique([messageId])
 }
 
 model Seat {
@@ -77,6 +94,49 @@ model Seat {
   @@index([userId, joinedAt])
 }
 
+model GameRound {
+  id         String    @id @default(cuid())
+  tableId    String
+  game       GameType
+  no         Int                                    // 테이블별 라운드 번호
+  startedAt  DateTime  @default(now())
+  endedAt    DateTime?
+  messageId  String?
+  result     Json?     @db.JsonB                    // 카드 결과, 승패 등
+  winners    Json?     @db.JsonB                    // 정산 요약 { userId: {...} }
+
+  table      Table     @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  bets       Bet[]
+
+  @@unique([tableId, no])
+  @@index([tableId, startedAt])
+}
+
+/* ======================
+   Wallet Transactions
+   ====================== */
+model WalletTx {
+  id        String    @id @default(cuid())
+  userId    String
+  amount    Int                                // + 크레딧 / - 차감
+  reason    TxReason
+  refBetId  String?
+  tableId   String?
+  roundId   String?
+  meta      Json?      @db.JsonB
+  createdAt DateTime   @default(now())
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  round     GameRound? @relation(fields: [roundId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([tableId, createdAt])
+  @@index([roundId])
+}
+
+/* ======================
+   Enums
+   ====================== */
 enum GameType {
   BLACKJACK
   BACCARAT
@@ -97,4 +157,12 @@ enum Outcome {
   BANKER
   PLAYER
   TIE
+}
+
+enum TxReason {
+  BET          // 베팅 차감
+  PAYOUT       // 당첨 지급
+  BONUS        // 보너스
+  DAILY        // 출석/일일 보상
+  MANUAL_ADJ   // 운영자 수동 조정
 }

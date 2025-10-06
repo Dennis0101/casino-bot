@@ -16,8 +16,8 @@ model User {
   balance      Int       @default(1000)
   dailyClaimed DateTime?
   banned       Boolean   @default(false)
-  bannedUntil  DateTime?                       // 일정 기간 차단
-  clientSeed   String?                         // 공정성용 (선택)
+  bannedUntil  DateTime?
+  clientSeed   String?
   createdAt    DateTime  @default(now())
 
   bets         Bet[]
@@ -98,15 +98,16 @@ model GameRound {
   id         String    @id @default(cuid())
   tableId    String
   game       GameType
-  no         Int                                    // 테이블별 라운드 번호
+  no         Int
   startedAt  DateTime  @default(now())
   endedAt    DateTime?
   messageId  String?
-  result     Json?     @db.JsonB                    // 카드 결과, 승패 등
-  winners    Json?     @db.JsonB                    // 정산 요약 { userId: {...} }
+  result     Json?     @db.JsonB
+  winners    Json?     @db.JsonB
 
   table      Table     @relation(fields: [tableId], references: [id], onDelete: Cascade)
   bets       Bet[]
+  walletTxs  WalletTx[]     // <-- 반대(Relation) 필드 추가!
 
   @@unique([tableId, no])
   @@index([tableId, startedAt])
@@ -118,7 +119,7 @@ model GameRound {
 model WalletTx {
   id        String    @id @default(cuid())
   userId    String
-  amount    Int                                // + 크레딧 / - 차감
+  amount    Int
   reason    TxReason
   refBetId  String?
   tableId   String?
@@ -160,9 +161,9 @@ enum Outcome {
 }
 
 enum TxReason {
-  BET          // 베팅 차감
-  PAYOUT       // 당첨 지급
-  BONUS        // 보너스
-  DAILY        // 출석/일일 보상
-  MANUAL_ADJ   // 운영자 수동 조정
+  BET
+  PAYOUT
+  BONUS
+  DAILY
+  MANUAL_ADJ
 }

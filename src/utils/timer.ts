@@ -73,26 +73,24 @@ export async function runCountdownEmbed(
     }
   };
 
-  // ✅ 타입 안전하게: 기존 Message.components(수신 전용)를
-  //    새 ActionRowBuilder<ButtonBuilder>[] 로 재구성해서 disabled 적용
+  // ✅ 기존 Message.components를 읽어서 "새" 빌더로 재구성(비활성화)
   const disableAllComponents = async () => {
-    if (!msg.components?.length) return;
-    try {
-      const rows = msg.components.map((row) => {
-        const newRow = new ActionRowBuilder<ButtonBuilder>();
-        for (const comp of row.components) {
-          // type 2 = Button
-          if ((comp as any).type === 2) {
-            const btn = ButtonBuilder.from(comp as any).setDisabled(true);
-            newRow.addComponents(btn);
+    const rows = msg.components?.length
+      ? msg.components.map((row) => {
+          const newRow = new ActionRowBuilder<ButtonBuilder>();
+          for (const comp of row.components) {
+            if ((comp as any).type === 2) {
+              // Button
+              const btn = ButtonBuilder.from(comp as any).setDisabled(true);
+              newRow.addComponents(btn);
+            }
           }
-          // (필요하면 여기서 SelectMenu 등 다른 타입도 케이스 추가)
-        }
-        return newRow;
-      });
-      await msg.edit({ components: rows });
-    } catch {
-      /* 무시 */
+          return newRow;
+        })
+      : [];
+
+    if (rows.length) {
+      try { await msg.edit({ components: rows }); } catch { /* 무시 */ }
     }
   };
 
@@ -105,11 +103,7 @@ export async function runCountdownEmbed(
     await safeEdit({ embeds: [baseEmbed(remain)] });
 
     if (opts.onTick) {
-      try {
-        await opts.onTick(remain, elapsed);
-      } catch {
-        /* 무시 */
-      }
+      try { await opts.onTick(remain, elapsed); } catch { /* 무시 */ }
     }
 
     if (remain <= 0) {
@@ -120,18 +114,10 @@ export async function runCountdownEmbed(
         await disableAllComponents();
       }
 
-      try {
-        await onFinish();
-      } catch {
-        /* 무시 */
-      }
+      try { await onFinish(); } catch { /* 무시 */ }
 
       if (opts.deleteOnFinish) {
-        try {
-          await msg.delete();
-        } catch {
-          /* 무시 */
-        }
+        try { await msg.delete(); } catch { /* 무시 */ }
       }
       return;
     }

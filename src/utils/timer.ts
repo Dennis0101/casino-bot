@@ -1,13 +1,11 @@
+// src/utils/timer.ts
 import {
-  EmbedBuilder,
-  Message,
   ActionRowBuilder,
   ButtonBuilder,
-  ComponentType,
-  type MessageActionRowComponentBuilder,
+  EmbedBuilder,
+  Message,
 } from "discord.js";
 
-/** 0~1 비율을 N칸 프로그레스 바로 렌더링 */
 function bar(p: number, slots = 10) {
   const clamped = Math.min(1, Math.max(0, p));
   const filled = Math.round(clamped * slots);
@@ -23,7 +21,7 @@ export type CountdownOptions = {
   onTick?: (remain: number, elapsed: number) => Promise<void> | void;
   /** 완료 시 메시지 삭제 (기본 false) */
   deleteOnFinish?: boolean;
-  /** 완료 시 컴포넌트 비활성화 (기본 false) — 버튼만 처리 */
+  /** 완료 시 컴포넌트 비활성화 (기본 false) */
   disableComponentsOnFinish?: boolean;
   /** 임베드 footer 텍스트 */
   footer?: string;
@@ -32,20 +30,11 @@ export type CountdownOptions = {
 };
 
 export type CountdownHandle = {
-  /** 타이머 취소 */
   cancel: () => void;
-  /** 남은 초 조회 */
   getRemaining: () => number;
-  /** 이미 끝났는지 */
   isFinished: () => boolean;
 };
 
-/**
- * 메시지 임베드를 주기적으로 갱신하는 카운트다운.
- * - 버튼/컴포넌트는 건드리지 않다가, 옵션 시 완료 때만 일괄 비활성화
- * - 안전 편집(safeEdit)로 삭제/권한 오류에도 크래시 방지
- * - 취소 핸들 반환
- */
 export async function runCountdownEmbed(
   msg: Message,
   sec: number,
@@ -59,6 +48,7 @@ export async function runCountdownEmbed(
 
   let finished = false;
   let timer: NodeJS.Timeout | null = null;
+
   const start = Date.now();
 
   const baseEmbed = (remain: number) => {
@@ -68,8 +58,10 @@ export async function runCountdownEmbed(
       .setDescription(
         [`⏱️ **${remain}s** 남음`, "", `\`${bar(progress, slots)}\``].join("\n")
       );
+
     if (opts.footer) emb.setFooter({ text: opts.footer });
     if (opts.color !== undefined) emb.setColor(opts.color);
+
     return emb;
   };
 
@@ -82,41 +74,38 @@ export async function runCountdownEmbed(
     try {
       await msg.edit(payload);
     } catch {
-      // 메시지가 삭제/권한문제 등으로 수정 불가 → 조용히 종료
+      // 메시지가 삭제/권한 문제 등으로 수정 불가 → 타이머 종료
       clearTimer();
       finished = true;
     }
   };
 
-  const disableAllButtons = async () => {
-    // 버튼만 사용한다는 전제(현재 UI). 버튼이 없다면 무시.
+  const disableAllComponents = async () => {
+    // Message.components -> ActionRow<MessageActionRowComponent>[]
+    // 안전하게 Builder로 변환해서 disabled 적용
     if (!msg.components?.length) return;
-
     try {
       const rows = msg.components.map((row) => {
-        // 기존 Row를 Builder로 변환
-        const rowBuilder = new ActionRowBuilder<MessageActionRowComponentBuilder>();
-        // 버튼만 비활성화
-        for (const comp of row.components) {
-          if (comp.type === ComponentType.Button) {
-            rowBuilder.addComponents(ButtonBuilder.from(comp).setDisabled(true));
-          } else {
-            // 버튼 외 컴포넌트는 원형 유지(그대로 복사)
-            // toJSON() -> Builder.from()이 없는 타입일 수 있어 제외
+        const builder = ActionRowBuilder.from(row) as ActionRowBuilder<ButtonBuilder>;
+        builder.components.forEach((c) => {
+          // 모든 타입을 버튼처럼 disabled 가능 처리 (discord.js가 핸들)
+          // @ts-expect-error - 각 컴포넌트 builder에 setDisabled 존재
+          if (typeof (c as any).setDisabled === "function") {
+            (c as any).setDisabled(true);
           }
-        }
-        return rowBuilder;
+        });
+        return builder;
       });
-
       await msg.edit({ components: rows });
     } catch {
-      // 편집 실패는 조용히 무시
+      /* 무시 */
     }
   };
 
   const tick = async () => {
     const elapsed = Math.floor((Date.now() - start) / 1000);
     const remain = Math.max(0, total - elapsed);
+
     if (finished) return;
 
     await safeEdit({ embeds: [baseEmbed(remain)] });
@@ -125,7 +114,7 @@ export async function runCountdownEmbed(
       try {
         await opts.onTick(remain, elapsed);
       } catch {
-        /* onTick 에러 무시 */
+        /* 무시 */
       }
     }
 
@@ -134,20 +123,20 @@ export async function runCountdownEmbed(
       clearTimer();
 
       if (opts.disableComponentsOnFinish) {
-        await disableAllButtons();
+        await disableAllComponents();
       }
 
       try {
         await onFinish();
       } catch {
-        /* onFinish 에러 무시 */
+        /* 무시 */
       }
 
       if (opts.deleteOnFinish) {
         try {
           await msg.delete();
         } catch {
-          /* 삭제 실패 무시 */
+          /* 무시 */
         }
       }
       return;
@@ -156,7 +145,7 @@ export async function runCountdownEmbed(
     timer = setTimeout(tick, tickMs);
   };
 
-  // 최초 렌더
+  // 첫 렌더
   await safeEdit({ embeds: [baseEmbed(total)] });
   timer = setTimeout(tick, tickMs);
 

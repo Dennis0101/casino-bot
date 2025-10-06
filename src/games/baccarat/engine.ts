@@ -9,7 +9,7 @@ import {
   rowAmountNudge,
   makeBetModal,
 } from "./ui.js";
-import { runCountdownEmbed } from "../../utils/timer.js";
+import { runCountdownEmbed } from "../../utils/timer";
 import type { BacState, MainKey, SideKey } from "./types.js";
 
 /* ===== 카드/슈 ===== */

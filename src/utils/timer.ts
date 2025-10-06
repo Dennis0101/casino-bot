@@ -1,10 +1,5 @@
 // src/utils/timer.ts
-import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  EmbedBuilder,
-  Message,
-} from "discord.js";
+import { EmbedBuilder, Message } from "discord.js";
 
 function bar(p: number, slots = 10) {
   const clamped = Math.min(1, Math.max(0, p));
@@ -13,21 +8,37 @@ function bar(p: number, slots = 10) {
 }
 
 export type CountdownOptions = {
-  slots?: number;                 // 진행바 칸 수(기본 10)
-  tickMs?: number;                // 틱 간격 ms(기본 1000)
+  /** 진행바 칸 수 (기본 10칸) */
+  slots?: number;
+  /** 틱 간격(ms). 기본 1000ms */
+  tickMs?: number;
+  /** 매 틱마다 호출 (remain: 남은초, elapsed: 경과초) */
   onTick?: (remain: number, elapsed: number) => Promise<void> | void;
-  deleteOnFinish?: boolean;       // 완료 시 메시지 삭제
-  disableComponentsOnFinish?: boolean; // 완료 시 버튼 비활성화
+  /** 완료 시 메시지 삭제 (기본 false) */
+  deleteOnFinish?: boolean;
+  /** 완료 시 컴포넌트 전부 제거 (기본 false) */
+  clearComponentsOnFinish?: boolean;
+  /** 임베드 footer 텍스트 */
   footer?: string;
+  /** 임베드 색상 (정수 또는 HEX) */
   color?: number;
 };
 
 export type CountdownHandle = {
+  /** 타이머 취소 */
   cancel: () => void;
+  /** 남은 초 조회 */
   getRemaining: () => number;
+  /** 이미 끝났는지 */
   isFinished: () => boolean;
 };
 
+/**
+ * 메시지 하나를 1초/또는 지정 간격으로 갱신하며 카운트다운을 표시.
+ * - 완료 시 onFinish 호출
+ * - 옵션으로 컴포넌트 제거/삭제 가능
+ * - 취소 핸들 제공
+ */
 export async function runCountdownEmbed(
   msg: Message,
   sec: number,
@@ -67,30 +78,9 @@ export async function runCountdownEmbed(
     try {
       await msg.edit(payload);
     } catch {
-      // 메시지 삭제/권한 문제 등 → 타이머 종료
+      // 메시지가 삭제되었거나 권한 문제 등: 타이머 정리만 하고 종료
       clearTimer();
       finished = true;
-    }
-  };
-
-  // ✅ 기존 Message.components를 읽어서 "새" 빌더로 재구성(비활성화)
-  const disableAllComponents = async () => {
-    const rows = msg.components?.length
-      ? msg.components.map((row) => {
-          const newRow = new ActionRowBuilder<ButtonBuilder>();
-          for (const comp of row.components) {
-            if ((comp as any).type === 2) {
-              // Button
-              const btn = ButtonBuilder.from(comp as any).setDisabled(true);
-              newRow.addComponents(btn);
-            }
-          }
-          return newRow;
-        })
-      : [];
-
-    if (rows.length) {
-      try { await msg.edit({ components: rows }); } catch { /* 무시 */ }
     }
   };
 
@@ -102,22 +92,42 @@ export async function runCountdownEmbed(
 
     await safeEdit({ embeds: [baseEmbed(remain)] });
 
+    // 사용자 정의 tick 훅
     if (opts.onTick) {
-      try { await opts.onTick(remain, elapsed); } catch { /* 무시 */ }
+      try {
+        await opts.onTick(remain, elapsed);
+      } catch {
+        /* 훅 에러 무시 */
+      }
     }
 
     if (remain <= 0) {
       finished = true;
       clearTimer();
 
-      if (opts.disableComponentsOnFinish) {
-        await disableAllComponents();
+      // 컴포넌트 전부 제거 (타입 충돌 없이 안전)
+      if (opts.clearComponentsOnFinish) {
+        try {
+          await msg.edit({ components: [] });
+        } catch {
+          /* 무시 */
+        }
       }
 
-      try { await onFinish(); } catch { /* 무시 */ }
+      // 완료 콜백
+      try {
+        await onFinish();
+      } catch {
+        /* 무시 */
+      }
 
+      // 메시지 삭제
       if (opts.deleteOnFinish) {
-        try { await msg.delete(); } catch { /* 무시 */ }
+        try {
+          await msg.delete();
+        } catch {
+          /* 무시 */
+        }
       }
       return;
     }

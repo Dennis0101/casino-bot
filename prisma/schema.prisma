@@ -8,9 +8,9 @@ generator client {
   provider = "prisma-client-js"
 }
 
-/* ======================
-   User / Wallet / Bets
-   ====================== */
+// ======================
+// User / Wallet / Bets
+// ======================
 model User {
   id           String    @id @db.VarChar(32) // Discord userId
   balance      Int       @default(1000)
@@ -46,8 +46,8 @@ model Bet {
   nonce       Int?
   createdAt   DateTime   @default(now())
 
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  table  Table? @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  table  Table?     @relation(fields: [tableId], references: [id], onDelete: SetNull)
   round  GameRound? @relation(fields: [roundId], references: [id], onDelete: SetNull)
 
   @@index([userId, createdAt])
@@ -56,9 +56,9 @@ model Bet {
   @@index([roundId])
 }
 
-/* ======================
-   Tables / Seats / Rounds
-   ====================== */
+// ======================
+// Tables / Seats / Rounds
+// ======================
 model Table {
   id          String       @id @default(cuid())
   type        GameType
@@ -112,9 +112,9 @@ model GameRound {
   @@index([tableId, startedAt])
 }
 
-/* ======================
-   Wallet Transactions
-   ====================== */
+// ======================
+// Wallet Transactions
+// ======================
 model WalletTx {
   id        String    @id @default(cuid())
   userId    String
@@ -134,9 +134,9 @@ model WalletTx {
   @@index([roundId])
 }
 
-/* ======================
-   Enums
-   ====================== */
+// ======================
+// Enums
+// ======================
 enum GameType {
   BLACKJACK
   BACCARAT

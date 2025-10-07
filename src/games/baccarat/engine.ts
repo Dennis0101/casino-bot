@@ -1,4 +1,10 @@
-import { ThreadAutoArchiveDuration, TextChannel, ModalSubmitInteraction, Message } from "discord.js";
+// src/games/baccarat/engine.ts
+import {
+  ThreadAutoArchiveDuration,
+  TextChannel,
+  ModalSubmitInteraction,
+  Message,
+} from "discord.js";
 import { prisma } from "../../db/client.js";
 import { Prisma } from "@prisma/client";
 import { CFG } from "../../config.js";
@@ -9,6 +15,7 @@ import {
   rowAmountNudge,
   makeBetModal,
 } from "./ui.js";
+// ⚠️ 빌드 후 dist에서 ESM import가 되도록 .js 확장자 사용
 import { runCountdownEmbed } from "../../utils/timer.js";
 import type { BacState, MainKey, SideKey } from "./types.js";
 
@@ -24,12 +31,10 @@ function buildShoe(decks = CFG.BAC_DECKS) {
   for (let i=shoe.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [shoe[i], shoe[j]]=[shoe[j], shoe[i]]; }
   return shoe;
 }
-const val = (c:string)=> CV[c.replace(/[♠♥♦♣]/g,"")];
-const sc  = (cards:string[]) => cards.reduce((a,c)=> (a + val(c)) % 10, 0);
-const isPair = (cards:string[]) => cards.length>=2 && strip(P0(cards)) === strip(P1(cards));
 const strip = (c?:string)=> (c??"").replace(/[♠♥♦♣]/g,"");
-const P0 = (a:string[]) => a[0];
-const P1 = (a:string[]) => a[1];
+const val   = (c:string)=> CV[strip(c)];
+const sc    = (cards:string[]) => cards.reduce((a,c)=> (a + val(c)) % 10, 0);
+const isPair= (cards:string[]) => cards.length>=2 && strip(cards[0]) === strip(cards[1]);
 
 /* ===== 페이아웃(총지급) ===== */
 const PAYOUT_MAIN: Record<MainKey, number> = {
@@ -58,7 +63,7 @@ export async function openHub(channel: TextChannel) {
       minPlayers: 2,
       maxPlayers: 999,
       shoeJson: buildShoe(),
-      stateJson: { roundNo: 0 }, // 라운드 카운터는 state에 보관(스키마 추가 불필요)
+      stateJson: { roundNo: 0 }, // 라운드 카운터만 보관
     },
   });
 
@@ -93,7 +98,7 @@ async function startBetting(tableId: string) {
 
   const ch = await (globalThis as any).discordClient.channels.fetch(t.channelId) as TextChannel;
 
-  // 이전 패널 정리(있으면)
+  // 이전 패널 제거
   try {
     const prevPanelId = (t0.stateJson as any)?.messageIds?.panel as string | undefined;
     if (prevPanelId) {
@@ -138,21 +143,20 @@ async function deal(tableId: string, ch: TextChannel) {
   const P: string[] = [shoe.pop()!, shoe.pop()!];
   const B: string[] = [shoe.pop()!, shoe.pop()!];
 
-  const dealingState = { phase: "DEALING", P, B, bets: st.bets } as const;
   await prisma.table.update({
     where: { id: tableId },
-    data: { stateJson: { ...st, ...dealingState }, shoeJson: shoe },
+    data: { stateJson: { ...st, phase:"DEALING", P, B, bets: st.bets }, shoeJson: shoe },
   });
 
   // 애니메이션
-  const fmt = (p: string[], b: string[], hideP = 0, hideB = 0) =>
-    `🂠 **PLAYER**: ${p.map((c,idx)=> idx<hideP ? "🂠" : c).join(" ")}\n🂠 **BANKER**: ${b.map((c,idx)=> idx<hideB ? "🂠" : c).join(" ")}`;
+  const fmt = (p: string[], b: string[]) =>
+    `🂠 **PLAYER**: ${p.join(" ")}\n🂠 **BANKER**: ${b.join(" ")}`;
 
   const m = await ch.send("🃏 카드를 배분합니다…");
-  await sleep(400); await m.edit(fmt([P[0]], [], 0, 0));
-  await sleep(400); await m.edit(fmt([P[0]], [B[0]], 0, 0));
-  await sleep(400); await m.edit(fmt(P, [B[0]], 0, 0));
-  await sleep(400); await m.edit(fmt(P, B, 0, 0));
+  await sleep(400); await m.edit(fmt([P[0]], []));
+  await sleep(400); await m.edit(fmt([P[0]], [B[0]]));
+  await sleep(400); await m.edit(fmt(P, [B[0]]));
+  await sleep(400); await m.edit(fmt(P, B));
 
   let pT = sc(P), bT = sc(B);
   const natural = pT >= 8 || bT >= 8;
@@ -162,7 +166,7 @@ async function deal(tableId: string, ch: TextChannel) {
     let p3v: number | undefined;
     if (pDraw) {
       const p3 = shoe.pop()!; P.push(p3); p3v = val(p3); pT = sc(P);
-      await sleep(600); await m.edit(fmt(P, B, 0, 0));
+      await sleep(600); await m.edit(fmt(P, B));
     }
     const bDraw = (() => {
       if (!pDraw) return bT <= 5;
@@ -175,7 +179,7 @@ async function deal(tableId: string, ch: TextChannel) {
     })();
     if (bDraw) {
       const bc = shoe.pop()!; B.push(bc); bT = sc(B);
-      await sleep(600); await m.edit(fmt(P, B, 0, 0));
+      await sleep(600); await m.edit(fmt(P, B));
     }
   }
 
@@ -202,7 +206,6 @@ async function showAndSettle(tableId: string, ch: TextChannel) {
   const winner: MainKey = pT > bT ? "PLAYER" : (bT > pT ? "BANKER" : "TIE");
   const pPair = isPair(P), bPair = isPair(B);
 
-  // 결과 안내 1
   const header = [
     `🂡 **PLAYER**: ${P.join(" ")} (= ${pT})`,
     `🂡 **BANKER**: ${B.join(" ")} (= ${bT})`,
@@ -210,7 +213,6 @@ async function showAndSettle(tableId: string, ch: TextChannel) {
   ].join("\n");
   await ch.send(header);
 
-  // 정산
   const winners: { uid: string; net: number }[] = [];
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const bets = st.bets;
@@ -241,8 +243,8 @@ async function showAndSettle(tableId: string, ch: TextChannel) {
       for (const k of ["PLAYER","BANKER","TIE"] as MainKey[]) {
         const amt = main[k] || 0; if (!amt) continue;
         const hit = (k === winner);
-        const payout = hit ? Math.floor(amt * PAYOUT_MAIN[k]) : 0; // 총지급
-        const net = payout - amt; // 순이익
+        const payout = hit ? Math.floor(amt * PAYOUT_MAIN[k]) : 0;
+        const net = payout - amt;
         totalNet += net;
 
         if (payout) await tx.user.update({ where: { id: uid }, data: { balance: { increment: payout } }});
@@ -284,7 +286,6 @@ async function showAndSettle(tableId: string, ch: TextChannel) {
 
   // 승리자 @멘션
   if (winners.length) {
-    // 큰 순으로 상위 10까지만
     winners.sort((a,b)=> b.net - a.net);
     const lines = winners.slice(0, 10).map(w => `<@${w.uid}>: **+${num(w.net)}**`);
     await ch.send(`🎉 승리자\n${lines.join("\n")}`);
@@ -292,7 +293,7 @@ async function showAndSettle(tableId: string, ch: TextChannel) {
     await ch.send("🙃 이번 라운드는 당첨자 없음");
   }
 
-  // 기록 채널에 요약 로그(선택)
+  // 기록 채널 요약 로그(선택)
   const logChId = process.env.HISTORY_CHANNEL_ID;
   if (logChId) {
     try {
@@ -311,15 +312,12 @@ async function showAndSettle(tableId: string, ch: TextChannel) {
     } catch {}
   }
 
-  // 라운드 패널/버튼 정리
+  // 패널 버튼 제거(도배 방지)
   try {
     const panelId = st.messageIds?.panel;
     if (panelId) {
       const panel = await ch.messages.fetch(panelId).catch(()=>null);
-      if (panel) {
-        // 버튼 제거만(내용 보존) → 필요하면 삭제(safeDelete(panel))로 바꾸세요
-        await panel.edit({ components: [] }).catch(()=>null);
-      }
+      if (panel) await panel.edit({ components: [] }).catch(()=>null);
     }
   } catch {}
 
@@ -352,7 +350,7 @@ export async function handleBacButton(i:any, action:string, rest:string[]){
     const msi = i as ModalSubmitInteraction;
 
     const keyRaw = msi.fields.getTextInputValue("betKey")?.trim()?.toUpperCase();
-    const amt = Number(msi.fields.getTextInputValue("betAmt"));
+    const amt = Math.trunc(Number(msi.fields.getTextInputValue("betAmt")));
     if (!Number.isFinite(amt) || amt <= 0) {
       return msi.reply({ ephemeral:true, content:"금액은 양의 정수여야 합니다." });
     }
@@ -368,21 +366,21 @@ export async function handleBacButton(i:any, action:string, rest:string[]){
       if (!validMain.includes(keyRaw as MainKey)) return msi.reply({ ephemeral:true, content:`메인 키는 ${validMain.join(", ")} 중 하나여야 합니다.` });
       const key = keyRaw as MainKey;
       st.bets.main[i.user.id] = st.bets.main[i.user.id] || {};
-      st.bets.main[i.user.id][key] = (st.bets.main[i.user.id][key] || 0) + Math.trunc(amt);
+      st.bets.main[i.user.id][key] = (st.bets.main[i.user.id][key] || 0) + amt;
       st.lastTarget[i.user.id] = { kind:"MAIN", key };
     } else {
       if (!validSide.includes(keyRaw as SideKey)) return msi.reply({ ephemeral:true, content:`사이드 키는 ${validSide.join(", ")} 중 하나여야 합니다.` });
       const key = keyRaw as SideKey;
       st.bets.side[i.user.id] = st.bets.side[i.user.id] || {};
-      st.bets.side[i.user.id][key] = (st.bets.side[i.user.id][key] || 0) + Math.trunc(amt);
+      st.bets.side[i.user.id][key] = (st.bets.side[i.user.id][key] || 0) + amt;
       st.lastTarget[i.user.id] = { kind:"SIDE", key };
     }
 
     await prisma.table.update({ where: { id: tableId }, data: { stateJson: st }});
-    return msi.reply({ ephemeral:true, content:`${keyRaw} ${Math.trunc(amt)} 베팅 완료` });
+    return msi.reply({ ephemeral:true, content:`${keyRaw} ${amt} 베팅 완료` });
   }
 
-  // 공통: 현재 베팅 상태 가져오기
+  // 공통: 현재 베팅 상태
   const getBettingState = async (tableId:string) => {
     const t = await prisma.table.findUnique({ where: { id: tableId }});
     const st = t?.stateJson as BacState | null;
@@ -390,7 +388,7 @@ export async function handleBacButton(i:any, action:string, rest:string[]){
     return { t, st: st as any };
   };
 
-  // 버튼: 메인/사이드 고정증가
+  // 버튼: 고정증가
   if (action === "betMain") {
     const [tableId, key, incStr] = rest as [string, MainKey, string];
     const inc = Math.trunc(Number(incStr||"0"));
@@ -456,6 +454,4 @@ export async function handleBacButton(i:any, action:string, rest:string[]){
 /* ===== util ===== */
 const sleep = (ms:number)=> new Promise(r=>setTimeout(r, ms));
 const num = (n:number|bigint)=> Number(n).toLocaleString("en-US");
-async function safeDelete(m: Message) {
-  try { await m.delete(); } catch {}
-}
+async function safeDelete(m: Message) { try { await m.delete(); } catch {} }

@@ -1,3 +1,4 @@
+// src/games/baccarat/ui.ts
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -19,7 +20,7 @@ export function embedBacRoundIntro(leftSec: number, roundNo: number) {
         `⏱️ 베팅 종료까지 **${leftSec}s**`,
         "메인: PLAYER / BANKER / TIE",
         "사이드: PLAYER_PAIR / BANKER_PAIR",
-        "버튼으로 누적, CLEAR 초기화, [입력] 버튼으로 자유 금액 입력",
+        "버튼으로 누적, CLEAR 초기화, ✏️ '입력' 버튼으로 자유 금액 입력",
       ].join("\n")
     )
     .setFooter({ text: "모의머니 · 실제 돈 아님" });
@@ -33,7 +34,7 @@ export function rowBacMain(tableId: string) {
     btn(tableId, "betMain", "TIE", "50", "TIE +50", ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(makeId("bac", "modalMain", tableId))
-      .setLabel("입력(메인)")
+      .setLabel("✏️ 입력(메인)")
       .setStyle(ButtonStyle.Secondary),
   );
 }
@@ -45,7 +46,7 @@ export function rowBacSide(tableId: string) {
     btn(tableId, "betSide", "BANKER_PAIR", "50", "B_PAIR +50", ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(makeId("bac", "modalSide", tableId))
-      .setLabel("입력(사이드)")
+      .setLabel("✏️ 입력(사이드)")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(makeId("bac", "clear", tableId))
@@ -71,21 +72,21 @@ export function rowAmountNudge(tableId: string) {
   }
 }
 
-/** 자유 입력 모달 */
+/** 자유 입력 모달 생성 */
 export function makeBetModal(
   kind: "MAIN" | "SIDE",
   tableId: string,
   keyOptions: (MainKey | SideKey)[]
 ) {
   const modal = new ModalBuilder()
-    .setCustomId(makeId("bac", "modalSubmit", kind, tableId))
+    .setCustomId(makeId("bac", "modalSubmit", kind, tableId)) // 제출 라우팅: action=modalSubmit, rest=[kind, tableId]
     .setTitle(kind === "MAIN" ? "메인 베팅 입력" : "사이드 베팅 입력");
 
   const keyInput = new TextInputBuilder()
-    .setCustomId("betKey")
+    .setCustomId("betKey") // 제출 시 필드 ID
     .setLabel("베팅 대상 (" + keyOptions.join(", ") + ")")
     .setStyle(TextInputStyle.Short)
-    .setPlaceholder(keyOptions[0])
+    .setPlaceholder(String(keyOptions[0]))
     .setRequired(true);
 
   const amtInput = new TextInputBuilder()
@@ -103,7 +104,7 @@ export function makeBetModal(
   return modal;
 }
 
-/** 내부 유틸 */
+/** 내부 유틸: 고정 증액 버튼 */
 function btn(
   tableId: string,
   action: "betMain" | "betSide",
